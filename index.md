@@ -13,7 +13,10 @@ I'll be recording these projects along with any interesting findings as we go al
 
 ### Projects 
 
-| Date Range              | Project                       | Short Description                                                                                     |
-| ----------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------- |
-| 2021/04/05 - 2021/04/11 | Mini-Project Sequence Website | Creating a landing page for this, along with an [inventory of concepts](data_science_primer.md) that I know for easy reference. |
+| Date Range              | Project                             | Short Description                                                                            |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| 2021/04/05 - 2021/04/11 | Mini-Project Sequence Website       | Creating a landing page, along with an [inventory of concepts](data_science_primer.md).      |
+| 2021/04/12 - 2021/04/18 | Final Exams                         | Studying for exams.                                                                          |
+| 2021/04/19 - 2021/04/25 | Final Exams                         | Studying for exams.                                                                          |
+| 2021/04/26 - 2021/05/02 | [Socioeconomic Factors and Education](ses_edu/ses_edu_code.Rmd) | A brief investigation into the influence of social and economic factors on math proficiency. |
 

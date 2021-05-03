@@ -1,0 +1,280 @@
+---
+title: "Socioeconomic Factors and Education"
+output: html_document
+code_folding: hide
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(reshape2)
+```
+
+```{r helper_functions, echo=FALSE}
+# Function for listing counts on boxplots
+## Shamelessly taken from https://gscheithauer.medium.com/how-to-add-number-of-observations-to-a-ggplot2-boxplot-b22710f7ef80
+stat_box_data <- function(x, upper_limit = 100) {
+  return( 
+    data.frame(
+      y = 0 * upper_limit,
+      label = paste('n=', 
+                    format(length(x), big.mark = ",", decimal.mark = ".", scientific = FALSE))
+    )
+  )
+}
+```
+
+```{r load_data, echo=FALSE, results=FALSE}
+# Pull in data from CSV file
+data <- read.csv2('schools_edfacts_assessments_2017.csv', sep=',')
+
+
+# Preview first few rows
+head(data)
+```
+
+
+| | | 
+|---|---|---|
+|***Techniques Used:***| ***Linear Regression, Box/Violin Plots***|
+|***Dataset Used:***| ***EdFacts (Aggregate of US Census, NCES, et. al.)***|
+|***Technical Stack Used:***| ***R (tidyverse, ggplot)***|
+
+---
+
+### Abstract
+
+In this week's project we perform a cursory analysis of publicly available education records. Specifically, we show the influence of SES (Socioeconomic Status) on academic performance as measured by math proficiency scores at the high school level. Our main takeaways are that economic status, race, and sex have small but notable relationships with performance.
+
+### Introduction and Objective 
+
+Many publications in education research highlight the impact of socioeconomic status on education outcomes. The general consensus being that a student's academic performance^[The concept of "academic performance" is a complex discussion topic. To avoid getting side-tracked, we will declare an assumption that proficiency scores represent accurate representations of student ability.] is often influenced by their background. The objective of this week's mini-project is to explore some of those relationships first hand.
+
+As a means of providing some structure to this analysis, we will loosely follow CRISP-DM:
+
+* **[Business Understanding]:** The "business" value of our analysis can be interpreted as costs and benefits. Our cost is the time invested in the analysis. Our benefits are technical skill gain and an increased understanding of the problem space.
+
+* **[Data Understanding]:** We will need to perform some preliminary work to inventory the data used. More specifically, we want to identify variables that relate to SES (gender, race, etc.) and academic performance (math proficiency, reading proficiency, etc.)
+
+* **[Data Preparation]:** The dataset in question will likely require some adjustments to be suitable for modeling. Common tasks include outlier identification and null value removal.
+
+* **[Modeling]:** Our intended models are linear regressions, which are nicely suited to evaluating relationships between variables.
+
+* **[Evaluation]:** Given the limited scope of this project (one week), the evaluation process is likely to be a matter of meeting the author's expectations.
+
+* **[Deployment]:** The project will be concluded when it's published to the Mini-Project Sequence website. Any subsequent updates are likely to be in their own post.
+
+
+
+### Data Understanding / Preparation
+
+Our dataset comes from [The Urban Institue](https://educationdata.urban.org/data-explorer/), an organization that provides data aggregates from sources such as the U.S. Census and National Center for Education Statistics. We pull records at the school level from the [EdFacts subset](https://educationdata.urban.org/documentation/schools.html#edfacts-state-assessments-by-grade).
+
+
+***Data Size***
+
+| | |
+|---|---|
+|Original File Size:| 583 MB|
+|Original File Type:| CSV|
+|Original File Shape:| 26 Columns x 4,069,382 Rows|
+|Original File Scope:| US School Information from 2017|
+
+A ~600 MB flat file is right on the edge of what we might convert into a SQLite database. It's large enough that many text editors will struggle to open it. But, given that we expect to lose some size from data munging, it's probably fine to use as-is.
+
+
+***Data Characteristics***
+
+The records represent state assessments of proficiency. Consistency between states is not guaranteed (i.e. what Idaho considers "proficient" may not be what Oregon considers "proficient"), nor is consistency between years. For our purposes we will be working with a single year of records narrowed down to a subset of relevant columns.
+
+
+```{r munge_data, echo=FALSE}
+# Strip out unnecessary columns
+data_munged <- data %>% subset(select=-c(school_name, ncessch_num, ncessch, year, leaid, lea_name, read_test_num_valid, math_test_num_valid, lep, homeless, migrant, disability, foster_care, military_connected, read_test_pct_prof_low, read_test_pct_prof_high, math_test_pct_prof_low, math_test_pct_prof_high))
+
+
+# Filter down to high school level only (grades 9-12 via the crosswalk information)
+## Then remove the now-unnecessary column
+data_munged <- data_munged %>% filter(grade_edfacts == 9)
+data_munged <- data_munged %>% subset(select=-c(grade_edfacts))
+
+
+# Fixup columns that were mistakenly read in as character strings
+num_cols <- c('read_test_pct_prof_midpt', 'math_test_pct_prof_midpt')
+for (col_name in num_cols) {
+  data_munged[col_name] <- as.numeric(unlist(data_munged[col_name]))
+}
+
+
+# Remove "bad value" records
+## With reference to the crosswalk tables, this translates to any value below 0
+## (i.e. "-1" means missing/not reported)
+num_cols <- data_munged %>% dplyr::select(where(is.numeric))
+num_cols <- names(num_cols)
+for (col_name in num_cols) {
+  data_munged <- filter(data_munged, data_munged[col_name] > 0)
+}
+
+
+# Fixup columns that should be factors
+## Doing this over a for-loop causes RStudio to crash, so we'll perform the
+## encondings manually
+data_munged$race <- factor(data_munged$race,
+                            levels=c(1, 2, 3, 4, 5, 6, 7, 8, 9, 20, 99),
+                            labels=c('White', 'Black', 'Hispanic', 'Asian',
+                                     'AI_AN', 'HA_PI', 'Two_Plus', 'Nonresident', 
+                                     'Unknown', 'Other', 'Total'))
+data_munged$race <- relevel(data_munged$race, ref='Total')
+
+data_munged$sex <- factor(data_munged$sex,
+                            levels=c(1, 2, 9, 99),
+                            labels=c('Male', 'Female', 'Unknown', 'Total'))
+data_munged$sex <- relevel(data_munged$sex, ref='Total')
+                          
+# data_munged$lep <- factor(data_munged$lep,
+#                             levels=c(1, 99),
+#                             labels=c('Yes', 'Total'))
+# data_munged$lep <- relevel(data_munged$lep, ref='Total')
+# 
+# data_munged$homeless <- factor(data_munged$homeless,
+#                             levels=c(1, 99),
+#                             labels=c('Yes', 'Total'))
+# data_munged$homeless <- relevel(data_munged$homeless, ref='Total')
+# 
+# data_munged$migrant <- factor(data_munged$migrant,
+#                             levels=c(1, 99),
+#                             labels=c('Yes', 'Total'))
+# data_munged$migrant <- relevel(data_munged$migrant, ref='Total')
+# 
+# data_munged$disability <- factor(data_munged$disability,
+#                             levels=c(0, 1, 2, 3, 4, 99),
+#                             labels=c('None', 'IDEA', '504', '504_Only', '504_and_IDEA', 'Total'))
+
+data_munged$econ_disadvantaged <- factor(data_munged$econ_disadvantaged,
+                            levels=c(1, 99),
+                            labels=c('Yes', 'Total'))
+data_munged$econ_disadvantaged <- relevel(data_munged$econ_disadvantaged, ref='Total')
+
+# data_munged$foster_care <- factor(data_munged$foster_care,
+#                             levels=c(1, 99),
+#                             labels=c('Yes', 'Total'))
+# data_munged$foster_care <- relevel(data_munged$foster_care, ref='Total')
+# 
+# data_munged$military_connected <- factor(data_munged$military_connected,
+#                             levels=c(1, 99),
+#                             labels=c('Yes', 'Total'))
+# data_munged$military_connected <- relevel(data_munged$military_connected, ref='Total')
+
+summary(data_munged)
+```
+
+
+
+### Modeling / Evaluation
+
+
+***Math Proficiency vs. Economically Disadvantaged Flag***
+
+Starting from the simplest possible interpretation of our goal, we compare the "economically disadvantaged" student bodies of schools to the "total" student bodies.
+
+We can see some difference in the math proficiency of the two groups. A linear regression estimates that economically disadvantaged records score roughly 7.3 points less than the general population. The t-test statistic gives a high degree of confidence that this difference is not due to random chance. The R-squared value, however, is very low, implying that the effect size is small.
+
+
+```{r visual_econ, echo=FALSE}
+# Run a linear regression against math midpt
+lm_model <- lm(math_test_pct_prof_midpt~econ_disadvantaged, data_munged)
+summary(lm_model)
+
+# Create a box/violin plot
+ggplot(data=data_munged, aes(x=econ_disadvantaged, y=math_test_pct_prof_midpt)) +
+  geom_violin(fill='lightblue') +
+  geom_boxplot(width=0.1, fill='white') +
+  xlab('Economically Disadvantaged') + ylab('Math Proficiency Midpoint') +
+  ggtitle('Math Proficiency vs. Economic Status') +
+  stat_summary(fun.data = stat_box_data, geom = "text")
+```
+
+
+***Math Proficiency vs. Race***
+
+Our previous model is a good start, but SES includes more than just economic information. We'd also like to explore the demographic dimensions (such as race and gender).
+
+Unfortunately, our dataset only has the economically disadvantaged indicator populated for "total". We don't have information on combinations like "economically disadvantaged females". We won't be able to explore interactions between the variables given our one week time limit.
+
+From the visual^[Astute readers will notice that the "Total" category includes more values than all other categories combined. This is a deliberate quality of the data; many schools have so few students of a given group that reporting statistics would amount to reporting identifying information. This is denoted in the dataset with a "-3", and filtered out by our data munging pipeline.], we can see evidence of differences in average performance by race.^[Race can be a contentious topic but it is a crucial focal point for many contemporary policy debates. For example, the [PASSNYC project](https://www.kaggle.com/passnyc/data-science-for-good) from 2018 was run in part to address long-standing debates on the fairness of NYC's [secondary school admissions test](https://en.wikipedia.org/wiki/Specialized_High_Schools_Admissions_Test#Fairness) towards different races.] All but the "American Indian or Alaskan Native" category pass the t-test. As before, the R-squared value is small, and the corresponding effect size likewise.
+
+```{r visual_race, echo=FALSE}
+# Run a linear regression against math midpt
+lm_model <- lm(math_test_pct_prof_midpt~race,data_munged)
+summary(lm_model)
+
+# Create a box/violin plot
+ggplot(data=data_munged, aes(x=race, y=math_test_pct_prof_midpt)) +
+  geom_violin(fill='lightblue') +
+  geom_boxplot(width=0.1, fill='white') +
+  xlab('Race') + ylab('Math Proficiency Midpoint') +
+  ggtitle('Math Proficiency vs. Race') +
+  stat_summary(fun.data = stat_box_data, geom = "text")
+```
+
+
+***Math Proficiency vs. Sex***
+
+The displayed differences between sexes is also small. Students who identified as female on average outperformed those who identified as male by a minor margin.
+
+```{r visual_gender, echo=FALSE}
+# Run a linear regression against math midpt
+lm_model <- lm(math_test_pct_prof_midpt~sex,data_munged)
+summary(lm_model)
+
+# Create a box/violin plot
+ggplot(data=data_munged, aes(x=sex, y=math_test_pct_prof_midpt)) +
+  geom_violin(fill='lightblue') +
+  geom_boxplot(width=0.1, fill='white') +
+  xlab('Sex') + ylab('Math Proficiency Midpoint') +
+  ggtitle('Math Proficiency vs. Sex') +
+  stat_summary(fun.data = stat_box_data, geom = "text")
+```
+
+### Conclusions
+
+We were able to extract some insights in overall patterns with regards to SES and academic performance. Specifically, we found small but a quantifiable differences between economically disadvantaged student populations and the overall student population. We also explored the differences in average performance between races and genders. However, limitations in our dataset prevented us from doing any analysis on interactions between these indicators. 
+
+```{r visual_race_gender, echo=FALSE}
+# Melt data to make a fancy chart
+z <- melt(data_munged, id.vars=c('race', 'sex'), measure.vars=c('math_test_pct_prof_midpt'))
+z <- z %>% filter(xor(sex != 'Total', race != 'Total'))
+
+# Make the fancy chart
+ggplot(z) + geom_boxplot(aes(x=race, y=value, color=sex)) +
+  xlab('Race') + ylab('Math Proficiency Midpoint') +
+  ggtitle('Math Proficiency vs. Race/Sex')
+
+```
+
+
+#### Appendix A: Comments on the Technical Stack
+
+I primarily work in Python, but wanted to spend some time using R given its prevalence in industry. A few thoughts from this project are listed below in no particular order.
+
+
+* Data filtering and selection is wonderful. Dplyr feels more natural than Pandas for many operations.
+
+* For-loops over column names are [frustratingly obtuse](https://stackoverflow.com/questions/26003574/use-dynamic-variable-names-in-dplyr). The manner in which dataframe columns are referenced is all over the place; sometimes data[race] works, sometimes it must be data$race, or even 'data[$race]'.
+  
+* The implementation of regressions is handy. The related syntax for symbolic manipualation feels strange, but the convenience of "y~x1+x2+x1*x2" is well-worth the weirdness.
+
+* Casting variables types is [not intuitive](https://www.geeksforgeeks.org/convert-factor-to-numeric-and-numeric-to-factor-in-r-programming/) at all. The default behavior of something like "as.factor(some_numeric_column)" is baffling. 
+  
+* Likewise converting [character columns to factors](https://community.rstudio.com/t/is-it-normal-to-take-long-time-to-rename-factors/14965) using the default behavior takes an absurd amount of time. Achieving reasonable runtimes seems to require manually specifying the levels for each column, and then running a separate "relevel()" command.
+
+* Special thanks to Dr. Scheithauer for publishing his [strategy](https://gscheithauer.medium.com/how-to-add-number-of-observations-to-a-ggplot2-boxplot-b22710f7ef80) for labelling box plots with counts, which we leveraged in our plots.
+
+
+#### Appendix B: Reflections
+
+This was intended to be a simple project to start off the practice problem series. And it was, though I spent more time figuring out R syntax than I would've liked. Hopefully the code used on these projects will gradually accumulate until the "how" of analysis takes less time than the "why".
+
+I should also spend some time reviewing my statistics fundamentals. This project applied very lightweight analysis; no curve-fitting, no fancy hypothesis testing, really just the plain output from R's linear model. It'd be worthwhile to do some heavier work just for the sake of practice.
+
+#### Footnotes
